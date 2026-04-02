@@ -207,6 +207,10 @@ def load_sessions(agent_types: list[str]) -> tuple[pd.DataFrame | None, str | No
             updated_at
         FROM agent_sessions
         WHERE agent_type = ANY(%s)
+          AND (
+              livekit_room_name LIKE 'web\\_%' ESCAPE '\\'
+              OR livekit_room_name LIKE 'call\\_%' ESCAPE '\\'
+          )
         ORDER BY COALESCE(started_at, created_at) DESC
     """
 
