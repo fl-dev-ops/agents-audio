@@ -208,15 +208,15 @@ def load_sessions(agent_types: list[str]) -> tuple[pd.DataFrame | None, str | No
         FROM agent_sessions
         WHERE agent_type = ANY(%s)
           AND (
-              livekit_room_name LIKE 'web\\_%' ESCAPE '\\'
-              OR livekit_room_name LIKE 'call\\_%' ESCAPE '\\'
+              livekit_room_name LIKE %s
+              OR livekit_room_name LIKE %s
           )
         ORDER BY COALESCE(started_at, created_at) DESC
     """
 
     try:
         with connect(DATABASE_URL, row_factory=dict_row) as conn:
-            rows = conn.execute(query, [agent_types]).fetchall()
+            rows = conn.execute(query, (agent_types, "web_%", "call_%")).fetchall()
     except Exception as exc:
         return None, str(exc)
 
