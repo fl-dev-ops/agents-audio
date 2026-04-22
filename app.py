@@ -8,7 +8,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
-import boto3
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
@@ -27,14 +26,6 @@ AGENT_TYPES = [
 AWS_S3_BUCKET = os.getenv("AWS_S3_BUCKET", "")
 AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "ap-south-1")
 AWS_S3_ENDPOINT = os.getenv("AWS_S3_ENDPOINT", "")
-AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
-AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-AWS_S3_FORCE_PATH_STYLE = os.getenv("AWS_S3_FORCE_PATH_STYLE", "").lower() in (
-    "1",
-    "true",
-    "yes",
-)
-SIGNED_URL_EXPIRY_SECONDS = int(os.getenv("SIGNED_URL_EXPIRY_SECONDS", "3600"))
 
 st.set_page_config(
     page_title="Intervoo Agent Sessions",
@@ -94,39 +85,6 @@ def build_session_label(row: pd.Series) -> str:
     return f"{started} | {row.get('agent_type', 'agent')} | {phone_number} | {row.get('id', '')}"
 
 
-@st.cache_resource
-def get_s3_client():
-    kwargs: dict[str, Any] = {
-        "region_name": AWS_DEFAULT_REGION,
-    }
-    if AWS_ACCESS_KEY_ID:
-        kwargs["aws_access_key_id"] = AWS_ACCESS_KEY_ID
-    if AWS_SECRET_ACCESS_KEY:
-        kwargs["aws_secret_access_key"] = AWS_SECRET_ACCESS_KEY
-    if AWS_S3_ENDPOINT:
-        kwargs["endpoint_url"] = AWS_S3_ENDPOINT
-    if AWS_S3_FORCE_PATH_STYLE:
-        kwargs["config"] = boto3.session.Config(s3={"addressing_style": "path"})
-    return boto3.client("s3", **kwargs)
-
-
-@st.cache_resource
-def get_s3_credentials_status() -> tuple[bool, str]:
-    try:
-        credentials = boto3.Session().get_credentials()
-        if credentials is None:
-            return (
-                False,
-                "AWS credentials were not found in the environment or local AWS config.",
-            )
-        frozen = credentials.get_frozen_credentials()
-        if not frozen.access_key or not frozen.secret_key:
-            return False, "AWS credentials are incomplete."
-        return True, ""
-    except Exception as exc:
-        return False, str(exc)
-
-
 def parse_s3_location(
     url: str, fallback_bucket: str, s3_key: str
 ) -> tuple[str, str] | None:
@@ -157,23 +115,25 @@ def parse_s3_location(
     return None
 
 
-def generate_presigned_url(url: str, s3_key: str) -> str:
+def build_public_s3_url(bucket: str, key: str) -> str:
+    if AWS_S3_ENDPOINT:
+        return f"{AWS_S3_ENDPOINT.rstrip('/')}/{bucket}/{key}"
+    return f"https://{bucket}.s3.{AWS_DEFAULT_REGION}.amazonaws.com/{key}"
+
+
+def resolve_public_object_url(url: str, s3_key: str) -> str:
     url = normalize_optional_text(url)
     s3_key = normalize_optional_text(s3_key)
+
+    if url:
+        return url
 
     location = parse_s3_location(url, AWS_S3_BUCKET, s3_key)
     if location is None:
         return url
 
     bucket, key = location
-    try:
-        return get_s3_client().generate_presigned_url(
-            "get_object",
-            Params={"Bucket": bucket, "Key": key},
-            ExpiresIn=SIGNED_URL_EXPIRY_SECONDS,
-        )
-    except Exception:
-        return url
+    return build_public_s3_url(bucket, key)
 
 
 @st.cache_data(ttl=300)
@@ -253,14 +213,14 @@ def load_sessions(agent_types: list[str]) -> tuple[pd.DataFrame | None, str | No
     df["has_audio"] = df["audio_url"].fillna("").ne("")
     df["has_transcript"] = df["transcript_url"].fillna("").ne("")
     df["audio_stream_url"] = df.apply(
-        lambda row: generate_presigned_url(
+        lambda row: resolve_public_object_url(
             row.get("audio_url") or "",
             row.get("audio_s3_key") or "",
         ),
         axis=1,
     )
     df["transcript_stream_url"] = df.apply(
-        lambda row: generate_presigned_url(
+        lambda row: resolve_public_object_url(
             row.get("transcript_url") or "",
             row.get("transcript_s3_key") or "",
         ),
@@ -287,16 +247,6 @@ def load_transcript(url: str) -> tuple[dict[str, Any] | None, str | None]:
 
 st.title("🎧 Intervoo Agent Sessions")
 st.markdown("Browse, filter, and listen to recorded sessions for the Intervoo agents.")
-
-s3_signing_available, s3_signing_error = get_s3_credentials_status()
-if not s3_signing_available:
-    st.warning(
-        "Private S3 objects cannot be opened yet. "
-        "Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, "
-        "`AWS_DEFAULT_REGION=ap-south-1`, and optionally `AWS_S3_BUCKET=fl-ekstep`."
-    )
-    if s3_signing_error:
-        st.caption(f"S3 signing status: {s3_signing_error}")
 
 df, error = load_sessions(AGENT_TYPES)
 
