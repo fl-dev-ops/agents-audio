@@ -16,16 +16,12 @@ from psycopg.rows import dict_row
 
 load_dotenv()
 
-DEFAULT_AGENT_TYPES = ["interview-agent", "job-agent"]
 DATABASE_URL = os.getenv("DATABASE_URL", "")
-AGENT_TYPES = [
-    agent.strip()
-    for agent in os.getenv("AGENT_TYPES", ",".join(DEFAULT_AGENT_TYPES)).split(",")
-    if agent.strip()
-]
 AWS_S3_BUCKET = os.getenv("AWS_S3_BUCKET", "")
 AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "ap-south-1")
 AWS_S3_ENDPOINT = os.getenv("AWS_S3_ENDPOINT", "")
+
+print('DATABASE_URL', DATABASE_URL)
 
 st.set_page_config(
     page_title="Intervoo Agent Sessions",
@@ -137,7 +133,7 @@ def resolve_public_object_url(url: str, s3_key: str) -> str:
 
 
 @st.cache_data(ttl=300)
-def load_sessions(agent_types: list[str]) -> tuple[pd.DataFrame | None, str | None]:
+def load_sessions() -> tuple[pd.DataFrame | None, str | None]:
     if not DATABASE_URL:
         return None, "DATABASE_URL is not set."
 
@@ -166,17 +162,14 @@ def load_sessions(agent_types: list[str]) -> tuple[pd.DataFrame | None, str | No
             created_at,
             updated_at
         FROM agent_sessions
-        WHERE agent_type = ANY(%s)
-          AND (
-              livekit_room_name LIKE %s
-              OR livekit_room_name LIKE %s
-          )
+        WHERE livekit_room_name LIKE %s
+           OR livekit_room_name LIKE %s
         ORDER BY COALESCE(started_at, created_at) DESC
     """
 
     try:
         with connect(DATABASE_URL, row_factory=dict_row) as conn:
-            rows = conn.execute(query, (agent_types, "web_%", "call_%")).fetchall()
+            rows = conn.execute(query, ("web_%", "call_%")).fetchall()
     except Exception as exc:
         return None, str(exc)
 
@@ -248,7 +241,7 @@ def load_transcript(url: str) -> tuple[dict[str, Any] | None, str | None]:
 st.title("🎧 Intervoo Agent Sessions")
 st.markdown("Browse, filter, and listen to recorded sessions for the Intervoo agents.")
 
-df, error = load_sessions(AGENT_TYPES)
+df, error = load_sessions()
 
 if error:
     st.error(f"Database connection error: {error}")
@@ -256,7 +249,7 @@ if error:
     st.stop()
 
 if df is None or df.empty:
-    st.warning("No sessions found for the selected agents.")
+    st.warning("No sessions found.")
     st.stop()
 
 st.sidebar.header("Filters")
@@ -276,16 +269,6 @@ if search_query:
         .str.contains(search_query, case=False)
     )
     filtered_df = filtered_df[mask]
-
-agent_options = {
-    "All": None,
-    "Interview Practice Agent": "interview-agent",
-    "Job Screening Agent": "job-agent",
-}
-selected_agent = st.sidebar.selectbox("Agent", list(agent_options.keys()))
-selected_agent_type = agent_options[selected_agent]
-if selected_agent_type is not None:
-    filtered_df = filtered_df[filtered_df["agent_type"] == selected_agent_type]
 
 mode_options = {
     "All": None,
