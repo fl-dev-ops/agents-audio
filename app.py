@@ -167,11 +167,16 @@ def load_sessions() -> tuple[pd.DataFrame | None, str | None]:
         ORDER BY COALESCE(started_at, created_at) DESC
     """
 
-    try:
-        with connect(DATABASE_URL, row_factory=dict_row) as conn:
-            rows = conn.execute(query, ("web_%", "call_%")).fetchall()
-    except Exception as exc:
-        return None, str(exc)
+    last_exc = None
+    for _ in range(3):
+        try:
+            with connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10) as conn:
+                rows = conn.execute(query, ("web_%", "call_%")).fetchall()
+            break
+        except Exception as exc:
+            last_exc = exc
+    else:
+        return None, str(last_exc)
 
     if not rows:
         return pd.DataFrame(), None
