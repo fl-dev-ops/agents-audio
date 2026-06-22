@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import quote, urlsplit, urlunsplit, urlparse
 from urllib.request import urlopen
 
 import pandas as pd
@@ -111,10 +111,16 @@ def parse_s3_location(
     return None
 
 
+def encode_s3_url(url: str) -> str:
+    parts = urlsplit(url)
+    encoded_path = quote(parts.path, safe="/")
+    return urlunsplit((parts.scheme, parts.netloc, encoded_path, parts.query, parts.fragment))
+
+
 def build_public_s3_url(bucket: str, key: str) -> str:
     if AWS_S3_ENDPOINT:
-        return f"{AWS_S3_ENDPOINT.rstrip('/')}/{bucket}/{key}"
-    return f"https://{bucket}.s3.{AWS_DEFAULT_REGION}.amazonaws.com/{key}"
+        return encode_s3_url(f"{AWS_S3_ENDPOINT.rstrip('/')}/{bucket}/{key}")
+    return encode_s3_url(f"https://{bucket}.s3.{AWS_DEFAULT_REGION}.amazonaws.com/{key}")
 
 
 def resolve_public_object_url(url: str, s3_key: str) -> str:
@@ -122,7 +128,7 @@ def resolve_public_object_url(url: str, s3_key: str) -> str:
     s3_key = normalize_optional_text(s3_key)
 
     if url:
-        return url
+        return encode_s3_url(url)
 
     location = parse_s3_location(url, AWS_S3_BUCKET, s3_key)
     if location is None:
